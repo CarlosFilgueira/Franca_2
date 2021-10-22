@@ -57,7 +57,9 @@ registradas em toda a área do Hemisfério Sul. Já no Hemisfério Norte
 tem-se a ocorrência da espécie *Eubalaena glacialis,* a qual sofre
 diversos impactos de origem antrópica.
 
-# Coleta de dados da Base OBIS
+# Coletando Informações de Bancos de Dados Abertos 
+
+## Banco de dados OBIS
 
 Iniciamos instalando os pacotes `dplyr`, `tidyverse` e `robis`. Em
 seguida, iniciou-se o download das ocorrências e demais informações
@@ -81,13 +83,13 @@ franca_obis <- robis::occurrence("Eubalaena australis")
 ```
 
 
-```{r dados}
+```{r dad}
 
 # checar dados
 names(franca_obis)
 ```
 
-# Problemas encontrados nos dados
+### Problemas encontrados
 
 Os dados disponíveis em repositórios abertos são repletos de dados oriundos de diversas fontes. Algumas vezes os coletores não conseguem capturar as informações de forma completa ou ocorrem alguns erros inerentes a coleta ou inserção destes dados nos repositórios.
 
@@ -97,7 +99,7 @@ Devido a elevada quantidade de informações se faz necessária a seleção das 
 franca_obis1 <- franca_obis %>% 
   dplyr::select(scientificName, decimalLatitude, decimalLongitude, bathymetry,
                 flags, waterBody, basisOfRecord, occurrenceStatus, rightsHolder,
-                datasetName, recordedBy, depth, locality, date_year, individualCount, year, sex) %>%
+                datasetName, recordedBy, depth, locality, date_year, individualCount, sex) %>%
   distinct()
 ```
 
@@ -128,7 +130,7 @@ franca_obis1 %>%
   geom_histogram() 
 
   # checar niveis
-  franca_obis1 %>% 
+franca_obis1 %>% 
     filter(!flags %in% c("ON_LAND,NO_DEPTH","no_depth,on_land","depth_exceeds_bath,on_land","on_land,no_depth", "on_land", "on_land,depth_exceeds_bath", "ON_LAND", "ON_LAND,DEPTH_EXCEEDS_BATH"),
            !is.na(datasetName),
            !waterBody %in% c("world","Global,French EEZ")) %>% 
@@ -170,6 +172,139 @@ ggplot() +
   labs(x = "longitude", y = "latitude", title = expression(italic("Eubalaena australis")))
 ```
 
+## Banco de dados GBIF
+
+Para coletarmos informações deste repositório precisamos do pacote `rgbif`. 
+
+```{r pacote}
+##Instalando pacote rgbif##
+library(rgbif)
+```
+
+Em seguida, iremos baixar as ocorrências da nossa espécie que constam no repositório GBIF para que possamos realizar os passos de limpeza dos dados. 
+
+```{r ocorrencias gbif}
+# baixar ocorrencias
+franca_gbif <- occ_data(scientificName = "Eubalaena australis", 
+                        hasCoordinate = TRUE,
+                        hasGeospatialIssue=FALSE)
+```
+
+```{r dim}
+## dimensoes
+
+dim(franca_gbif)
+
+dim(franca_gbif$data)
+```
+
+``` {r dados}
+# checar campos
+franca_gbif$data %>% names
+```
+
+Após checar os dados iremos observar quais os principais `issues`informados pelo repositório. Esta estapa nos auxiliará na filtragem dos dados.
+
+```{r issues}
+# Checar issus
+
+gbif_issues()
+```
+
+```{r issues franca}
+# checar os issues individuais da espécie
+issues_gbif <- franca_gbif$data$issues %>%
+  # unique() %>%
+  strsplit(.,"[,]") %>%
+  unlist() %>%
+  unique()
+
+issues_gbif
+```
+
+O próximo passo é selecionar os campos de interesse para reduzirmos a quantidade de dados a serem analisados.
+
+```{r select}
+# selecionar campos de interesse
+franca_gbif1 <- franca_gbif$data %>%
+  dplyr::select(scientificName, decimalLatitude, decimalLongitude,issues,
+                basisOfRecord, sex, rightsHolder,continent, year, month, day, 
+                datasetName, recordedBy, waterBody, country, iucnRedListCategory, countryCode, depth)
+```
+
+Nosso conjunto de dados `franca_gbif1`contêm 500 observações, distribuidas em 18 variáveis. No entanto, algumas observações podem estar duplicadas, para garantir a qualidade dos dados iremos selecionar as ocorrências únicas.
+
+```{r occor unic}
+# ocorrencias únicas
+franca_gbif1 <- franca_gbif1 %>% 
+  distinct()
+```
+
+Observe agora que as observações foram reduzidas para 222. Prosseguindo com as análises iremos investigar os níveis suspeitos.
+
+```{r niveis}
+# checar niveis dos fatores
+lapply(franca_gbif1, unique)
+
+# investigar niveis suspeitos
+franca_gbif1 %>% 
+  distinct(country) %>% 
+  pull()
+```
+
+```{r plot c}
+# country
+franca_gbif1 %>%
+  group_by(country) %>% 
+  summarise(occ = length(scientificName)) %>% 
+  ggplot(aes(occ, y=country)) +
+  geom_bar(stat = 'identity')
+```
+
+A maioria das ocorrências registradas neste repositório foram na **Argentina** e **Australia**. 
+
+A fim de compreender melhor a distribuição de *Eubalaena australis* iremos unificar as ocorrências dos dois repositórios analisados: OBIS e GBIF. 
+Antes precisaremos descobrir as diferenças entre as variáveis:
+
+```{r unif}
+# unir GBIF e OBIS
+
+# ver diferencas
+setdiff(names(franca_gbif1), names(franca_obis2))
+setdiff(names(franca_obis2), names(franca_gbif1))
+```
+
+```{r unificar}
+# juntar os dados
+franca_big <- bind_rows(franca_gbif1 %>% 
+                        mutate(repo = paste0("gbif", row.names(.))), 
+                      franca_obis2 %>% 
+                        mutate(repo = paste0("obis", row.names(.)))) %>%
+  column_to_rownames("repo") %>% 
+  dplyr::select(decimalLongitude, decimalLatitude, depth) %>% 
+  distinct() %>% 
+  rownames_to_column("occ") %>% 
+  separate(col = "occ", into = c("datasetName", "rn"), sep = 4) %>%
+  mutate(scientificName = "Eubalaena australis") %>% 
+  dplyr::select(-rn)
+```
+
+Nosso conjunto de dados unificado foi nomeado de `franca_big`. Nele constam 1130 observações com 5 variáveis. Vamos agora mapear a distribuição da nossa espécie por meio da latitude. 
+
+```{r latit}
+# mapear ocorrencias pela latitude
+franca_big %>% 
+  mutate(lat = round(decimalLatitude)) %>% 
+  group_by(lat, scientificName) %>%
+  summarise(occ = length(scientificName)) %>%
+  ggplot(aes(y = occ, x = lat, color = scientificName)) +
+  geom_point() +
+  geom_smooth() +
+  theme_classic() +
+  labs(x = "latitude", y = 'ocorrências')
+```
+Podemos observar que não temos nenhuma ocorrência de *Eubalaena australis* acima de latitude -20º. Isso corrobora com a distribuição restrita desta espécie para o Hemisfério Sul, tendo sua maior concentração nas latitudes menores que -40º. 
+
 # Aplicação de gráficos interativos
 
 Os gráficos interativos permitem uma melhor observação dos pontos de ocorrência, além de se apresentar como um atrativo a mais para o site. Para se utilizar esta funcionalidade deve-se carregar o pacote `leaflet`
@@ -178,19 +313,80 @@ library(leaflet)
 ```
 
 ```{r mapa inter}
-
 # conferir no mapa
-franca_obis2 %>% 
+pal <- colorFactor(palette = "viridis", domain = unique(franca_big$datasetName))
+franca_big %>% 
   leaflet() %>% 
   addTiles() %>% 
-  addMarkers(~decimalLongitude,
-             ~decimalLatitude)
+  addCircleMarkers(~decimalLongitude,
+                   ~decimalLatitude,
+                   radius = 4,
+                   label = ~as.character(datasetName),
+                   color = ~pal(franca_big$datasetName),
+                   stroke = FALSE, fillOpacity = 0.6)%>%
+  addLegend('bottomright', 
+          colors = unique(pal(franca_big$datasetName)), 
+          labels = unique(franca_big$datasetName),
+          title = 'Bases de Dados',
+          opacity = 0.6)
 ```
 
-Observando no mapa anterior quase não vi ocorrencias na região da APA da Baleia Franca em Santa Catarina. Farei a seguir um mapa com os dados antes da aplicação do ultimo filtro:
-OBS: O mapa sem a aplicação do filtro continha muitos dados o que tornou o grafico interativo muito pesado, desse modo tive que descarta-lo.
+Acima temos um exemplo com os dados unificados sobre nossa espécie alvo (dois repositórios). Podemos obsrrvar que alguns pontos de ocorrência se sobrepõem.
+Deste ponto em diante iremos utilizar os dados `franca_obis2`que apresentam maior quantidade de observações. 
 
+```{r map obis2}
+# conferir no mapa OBIS 2
+ pal2 <- colorFactor(palette = "viridis", domain = unique(franca_obis2$individualCount))
 
+ franca_obis2 %>% 
+   leaflet() %>% 
+   addTiles() %>% 
+   addCircleMarkers(~decimalLongitude,
+                    ~decimalLatitude,
+                    radius = 4,
+                    label = ~as.character(locality),
+                    color = ~pal2(franca_obis2$individualCount),
+                    stroke = FALSE, fillOpacity = 0.6)%>%
+   addLegend('bottomright', 
+             colors = unique(pal2(franca_obis2$individualCount)), 
+             labels = unique(franca_obis2$individualCount),
+             title = 'Nº Indivíduos',
+             opacity = 0.6)
+```
 
+Neste mapa classificamos os pontos de ocorrência pela quantidade de indivíduos ao longo de toda a distribuição de *Eubalaena australis*. 
 
+Outros gráficos podem ser elaborados utilizando a função `Plotly` para melhorar a interação entre as informações e apresentar mais funcionalidades aos gráficos, como no exemplo abaixo:
 
+```{r plot graf}
+#plotar ocorrências ao longo do tempo
+
+library(plotly)
+
+fr <- franca_obis2 %>% 
+  mutate(date = round(date_year)) %>% 
+  group_by(date, waterBody) %>%
+  summarise(occ = length(scientificName)) %>%
+  ggplot(aes(y = occ, x = date, color = waterBody)) +
+  geom_point() +
+  theme_classic() +
+  labs(x = "Anos", y = 'Ocorrências')
+
+ggplotly(fr)
+```
+
+O pacote `ggplot`nos fornece a possibilidade de criarmos um gráfico animado. Sendo assim, utilizamos os dados do repositório OBIS e plotamos uma serie temporal de ocorrência da baleia franca austral, informando também dados como a profundidade e latitude de ocorrência:
+
+```{r animação}
+#grafico animado
+gg <- ggplot(franca_obis2, aes(decimalLatitude, waterBody, color= bathymetry)) +
+  geom_point(aes(frame = date_year, ids=locality))
+  
+ggplotly(gg)
+```
+
+*Enfim, compartilhe os dados e façamos o melhor para a ciência, meio ambiente e a sociedade.*
+
+<center>
+![](imagens/base-de-dados-imagem3-1.jpg){width="648"}
+</center>
